@@ -1,0 +1,12 @@
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache openssl
+
+COPY package.json ./
+RUN npm install --legacy-peer-deps
+
+COPY prisma ./prisma
+RUN npx prisma generate
+
+EXPOSE 5555
+CMD ["npx", "prisma", "studio", "--port", "5555", "--browser", "none", "--hostname", "0.0.0.0"]

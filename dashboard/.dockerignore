@@ -1,0 +1,16 @@
+# dashboard/.dockerignore
+node_modules/
+.next/
+out/
+.turbo/
+.cache/
+*.log
+.env
+.env.local
+.env.development
+.env.production
+.git/
+.gitignore
+README.md
+Dockerfile
+Dockerfile.studio

@@ -1,0 +1,189 @@
+# honeypot/docker-compose.yml
+services:
+  # ─────────────────────────────────────────
+  # PostgreSQL – attack database
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: honeypot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: honeypot
+      POSTGRES_USER: honeypot
+      POSTGRES_PASSWORD: honeypot_secret
+    ports:
+      - "5444:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honeypot -d honeypot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─────────────────────────────────────────
+  # WordPress MySQL
+  # ─────────────────────────────────────────
+  wordpress-db:
+    image: mysql:8.0
+    container_name: honeypot-wp-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: wp_root_secret
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress_secret
+    volumes:
+      - wp_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "wordpress", "-pwordpress_secret"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ─────────────────────────────────────────
+  # WordPress Honeypot (internal only)
+  # ─────────────────────────────────────────
+  wordpress:
+    image: wordpress:latest
+    container_name: honeypot-wordpress
+    restart: unless-stopped
+    depends_on:
+      wordpress-db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: wordpress-db:3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress_secret
+      WORDPRESS_CONFIG_EXTRA: |
+        define('COOKIE_DOMAIN', false);
+        define('COOKIEPATH', '/');
+        define('SITECOOKIEPATH', '/');
+        define('ADMIN_COOKIE_PATH', '/');
+        define('FORCE_SSL_ADMIN', false);
+        if (!defined('ZLIB_OUTPUT_COMPRESSION')) define('ZLIB_OUTPUT_COMPRESSION', false);
+        $$_fwd_host = isset($$_SERVER['HTTP_X_FORWARDED_HOST']) ? $$_SERVER['HTTP_X_FORWARDED_HOST'] : (isset($$_SERVER['HTTP_HOST']) ? $$_SERVER['HTTP_HOST'] : 'localhost:8001');
+        $$_fwd_host = urldecode($$_fwd_host);
+        if (strpos($$_fwd_host, ',') !== false) {
+          $$_parts = explode(',', $$_fwd_host);
+          $$_fwd_host = trim($$_parts[0]);
+        }
+        if (isset($$_SERVER['HTTP_X_FORWARDED_HOST'])) {
+          $$_SERVER['HTTP_HOST'] = $$_fwd_host;
+          $$_SERVER['SERVER_NAME'] = $$_fwd_host;
+          $$_SERVER['SERVER_PORT'] = isset($$_SERVER['HTTP_X_FORWARDED_PORT']) ? $$_SERVER['HTTP_X_FORWARDED_PORT'] : 80;
+        }
+        $$_wp_host = $$_fwd_host;
+        $$_wp_scheme = (isset($$_SERVER['HTTP_X_FORWARDED_PROTO']) && $$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') ? 'https' : 'http';
+        define('WP_HOME', $$_wp_scheme . '://' . $$_wp_host);
+        define('WP_SITEURL', $$_wp_scheme . '://' . $$_wp_host);
+    ports:
+      - "8080:80"    
+    volumes:
+      - wp_data:/var/www/html
+    # NOT exposed to host – only accessible inside Docker network via proxy
+
+  # ─────────────────────────────────────────
+  # Python Honeypot Proxy
+  # ─────────────────────────────────────────
+  proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: honeypot-proxy
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      wordpress:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://honeypot:honeypot_secret@postgres:5432/honeypot
+      WORDPRESS_URL: http://wordpress:80
+      UPLOADS_DIR: ./uploads
+      SECRET_KEY: supersecret_proxy_key_change_in_prod
+      PROXY_PUBLIC_URL: http://localhost:8001
+      SMTP_HOST: mail.domain.com
+      SMTP_PORT: 587
+      SMTP_USERNAME: mail@gmail.com
+      SMTP_PASSWORD: "bq!sfdsfsfsg;z}D-("
+      SMTP_FROM: mail@gmail.com
+      SMTP_USE_TLS: True
+      ALERT_EMAIL_TO: montagabalh@gmail.com
+      EMAIL_ALERT_REPEAT_ENABLED: true
+      EMAIL_ALERT_REPEAT_THRESHOLD: 25
+      EMAIL_ALERT_REPEAT_WINDOW_SECONDS: 60
+      EMAIL_ALERT_COOLDOWN_SECONDS: 900
+      EMAIL_ALERT_IP_BLOCK_ENABLED: true
+      EMAIL_DAILY_AI_REPORT_ENABLED: true
+      EMAIL_DAILY_REPORT_HOUR: 8
+      EMAIL_DAILY_REPORT_MINUTE: 0
+      EMAIL_DAILY_REPORT_HOURS_BACK: 24
+      ALERT_TIMEZONE: UTC
+      GITHUB_TOKEN: github_pat_13434244555235234255235524524
+    ports:
+      - "8001:8001"
+    volumes:
+      - uploads_data:/uploads
+
+  # ─────────────────────────────────────────
+  # Next.js Dashboard
+  # ─────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: honeypot-dashboard
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://honeypot:honeypot_secret@postgres:5432/honeypot
+      NEXTAUTH_SECRET: supersecret_dashboard_key_change_in_prod
+      NEXTAUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_PROXY_URL: http://localhost:8001
+      UPLOADS_DIR: ../proxy/uploads
+      ADMIN_EMAIL: montagabalh@gmail.com
+      ADMIN_PASSWORD: admin123
+      GITHUB_TOKEN: github_pat_11AYAWttW2234TT%556cCCCCGBDGRTT
+      SMTP_HOST: mail.domain.com
+      SMTP_PORT: 587
+      SMTP_USERNAME: mail@gmail.com
+      SMTP_PASSWORD: "1211221"
+      SMTP_FROM: mail@gmail.com
+      SMTP_USE_TLS: True
+      OTP_SECRET: change_me_otp_secret
+      OTP_TTL_SECONDS: 600
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads_data:/uploads:ro
+
+  # ─────────────────────────────────────────
+  # Prisma Studio
+  # ─────────────────────────────────────────
+  prisma-studio:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.studio
+    container_name: honeypot-prisma-studio
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://honeypot:honeypot_secret@postgres:5432/honeypot
+    ports:
+      - "5555:5555"
+
+volumes:
+  postgres_data:
+  wp_data:
+  wp_db_data:
+  uploads_data:
+
+networks:
+  default:
+    name: honeypot-network

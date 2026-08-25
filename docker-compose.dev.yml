@@ -1,0 +1,100 @@
+# honeypot/docker-compose.dev.yml
+# يشغّل فقط البنية التحتية (postgres + wordpress)
+# بينما تشغّل proxy و dashboard محلياً على جهازك
+#
+# الأمر:
+#   docker compose -f docker-compose.dev.yml up
+#
+# ثم في terminals منفصلة:
+#   cd proxy && python main.py
+#   cd dashboard && npm run dev
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: honeypot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: honeypot
+      POSTGRES_USER: honeypot
+      POSTGRES_PASSWORD: honeypot_secret
+    ports:
+      - "5444:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honeypot -d honeypot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  wordpress-db:
+    image: mysql:8.0
+    container_name: honeypot-wp-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: wp_root_secret
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress_secret
+    volumes:
+      - wp_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "wordpress", "-pwordpress_secret"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  wordpress:
+    image: wordpress:latest
+    container_name: honeypot-wordpress
+    restart: unless-stopped
+    depends_on:
+      wordpress-db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: wordpress-db:3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress_secret
+      WORDPRESS_CONFIG_EXTRA: |
+        define('COOKIE_DOMAIN', false);
+        define('COOKIEPATH', '/');
+        define('SITECOOKIEPATH', '/');
+        define('ADMIN_COOKIE_PATH', '/');
+        define('FORCE_SSL_ADMIN', false);
+        if (!defined('ZLIB_OUTPUT_COMPRESSION')) define('ZLIB_OUTPUT_COMPRESSION', false);
+        $$_fwd_host = isset($$_SERVER['HTTP_X_FORWARDED_HOST']) ? $$_SERVER['HTTP_X_FORWARDED_HOST'] : (isset($$_SERVER['HTTP_HOST']) ? $$_SERVER['HTTP_HOST'] : 'localhost:8001');
+        $$_fwd_host = urldecode($$_fwd_host);
+        if (strpos($$_fwd_host, ',') !== false) {
+          $$_parts = explode(',', $$_fwd_host);
+          $$_fwd_host = trim($$_parts[0]);
+        }
+        if (isset($$_SERVER['HTTP_X_FORWARDED_HOST'])) {
+          $$_SERVER['HTTP_HOST'] = $$_fwd_host;
+          $$_SERVER['SERVER_NAME'] = $$_fwd_host;
+          $$_SERVER['SERVER_PORT'] = isset($$_SERVER['HTTP_X_FORWARDED_PORT']) ? $$_SERVER['HTTP_X_FORWARDED_PORT'] : 80;
+        }
+        $$_wp_host = $$_fwd_host;
+        $$_wp_scheme = (isset($$_SERVER['HTTP_X_FORWARDED_PROTO']) && $$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') ? 'https' : 'http';
+        define('WP_HOME', $$_wp_scheme . '://' . $$_wp_host);
+        define('WP_SITEURL', $$_wp_scheme . '://' . $$_wp_host);
+    ports:
+      - "8080:80"
+    volumes:
+      - wp_data:/var/www/html
+
+  # ── مجلد الملفات المعترضة — مشترك مع proxy المحلي ──────────
+  # لا يوجد container هنا، بل مجلد محلي على جهازك
+  # الـ proxy المحلي سيستخدم UPLOADS_DIR من ملف proxy/.env
+
+volumes:
+  postgres_data:
+  wp_data:
+  wp_db_data:
+
+networks:
+  default:
+    name: honeypot-network

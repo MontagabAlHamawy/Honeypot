@@ -1,0 +1,194 @@
+// Prisma schema – mirrors the tables created by the proxy logger
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────────────────
+// Dashboard users (login auth)
+// ──────────────────────────────────────────────────────────
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("admin")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+// ──────────────────────────────────────────────────────────
+// Attacker sessions
+// ──────────────────────────────────────────────────────────
+model Session {
+  id         String    @id @db.Uuid
+  ipAddress  String    @map("ip_address")
+  country    String?
+  city       String?
+  region     String?
+  latitude   Float?
+  longitude  Float?
+  isp        String?
+  userAgent  String?   @map("user_agent")
+  sourceTabId String?  @map("source_tab_id")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  endedAt    DateTime? @map("ended_at")
+
+  requests   Request[]
+  events     Event[]
+  attacks    Attack[]
+  snapshots  PageSnapshot[]
+  uploads    CapturedUpload[]
+  loginAttempts WpLoginAttempt[]
+  recordingConsent RecordingConsent?
+  recordings SessionRecording[]
+
+  @@map("sessions")
+}
+
+model WpLoginAttempt {
+  id        BigInt   @id @default(autoincrement())
+  sessionId String?  @map("session_id") @db.Uuid
+  username  String?
+  ipAddress String?  @map("ip_address")
+  status    String
+  userAgent String?  @map("user_agent")
+  timestamp DateTime @default(now())
+
+  session Session? @relation(fields: [sessionId], references: [id])
+
+  @@map("wp_login_attempts")
+}
+
+model RecordingConsent {
+  sessionId    String   @id @map("session_id") @db.Uuid
+  consentGiven Boolean  @map("consent_given")
+  updatedAt    DateTime @default(now()) @map("updated_at")
+
+  session Session @relation(fields: [sessionId], references: [id])
+
+  @@map("recording_consents")
+}
+
+model SessionRecording {
+  id         BigInt   @id @default(autoincrement())
+  sessionId  String?  @map("session_id") @db.Uuid
+  savedPath  String   @map("saved_path")
+  mimeType   String?  @map("mime_type")
+  sizeBytes  BigInt?  @map("size_bytes")
+  recordedAt DateTime @default(now()) @map("recorded_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  session Session? @relation(fields: [sessionId], references: [id])
+
+  @@map("session_recordings")
+}
+
+// ──────────────────────────────────────────────────────────
+// HTTP requests
+// ──────────────────────────────────────────────────────────
+model Request {
+  id             BigInt   @id @default(autoincrement())
+  sessionId      String?  @map("session_id") @db.Uuid
+  method         String
+  path           String
+  queryString    String?  @map("query_string")
+  headers        Json?
+  payload        String?
+  cookies        Json?
+  responseStatus Int?     @map("response_status")
+  timestamp      DateTime @default(now())
+
+  session Session? @relation(fields: [sessionId], references: [id])
+
+  @@map("requests")
+}
+
+// ──────────────────────────────────────────────────────────
+// Behavioural events (mouse, keyboard, scroll, click)
+// ──────────────────────────────────────────────────────────
+model Event {
+  id        BigInt   @id @default(autoincrement())
+  sessionId String?  @map("session_id") @db.Uuid
+  eventType String   @map("event_type")
+  dataJson  Json?    @map("data_json")
+  timestamp DateTime @default(now())
+
+  session Session? @relation(fields: [sessionId], references: [id])
+
+  @@map("events")
+}
+
+// ──────────────────────────────────────────────────────────
+// Detected attacks
+// ──────────────────────────────────────────────────────────
+model Attack {
+  id         BigInt   @id @default(autoincrement())
+  sessionId  String?  @map("session_id") @db.Uuid
+  attackType String   @map("attack_type")
+  severity   String
+  payload    String?
+  path       String?
+  confidence Float?   @default(0)
+  score      Int?     @default(0)
+  detector   String?
+  requestMethod String? @map("request_method")
+  requestQuery  String? @map("request_query")
+  requestHeaders Json?  @map("request_headers")
+  requestBody    String? @map("request_body")
+  ipAddress      String? @map("ip_address")
+  userAgent      String? @map("user_agent")
+  country        String?
+  city           String?
+  toolHint       String? @map("tool_hint")
+  behaviorPattern String? @map("behavior_pattern")
+  frequency1m     Int?    @map("frequency_1m")
+  attackDetails   Json?   @map("attack_details")
+  timestamp  DateTime @default(now())
+
+  session Session? @relation(fields: [sessionId], references: [id])
+  @@map("attacks")
+}
+
+// ──────────────────────────────────────────────────────────
+// Page DOM snapshots (لعرض الصفحة في Session Replay)
+// ──────────────────────────────────────────────────────────
+model PageSnapshot {
+  id              BigInt   @id @default(autoincrement())
+  sessionId       String?  @map("session_id") @db.Uuid
+  path            String
+  html            String   // كامل الـ DOM بعد تجميده
+  viewportWidth   Int      @map("viewport_width")
+  viewportHeight  Int      @map("viewport_height")
+  scrollX         Int      @default(0) @map("scroll_x")
+  scrollY         Int      @default(0) @map("scroll_y")
+  timestamp       DateTime @default(now())
+
+  session Session? @relation(fields: [sessionId], references: [id])
+
+  @@map("page_snapshots")
+  // No unique constraint - store all snapshots for full timeline
+}
+
+// ──────────────────────────────────────────────────────────
+// Captured file uploads (intercepted by proxy)
+// ──────────────────────────────────────────────────────────
+model CapturedUpload {
+  id           BigInt   @id @default(autoincrement())
+  sessionId    String?  @map("session_id") @db.Uuid
+  originalName String   @map("original_name")
+  mimeType     String?  @map("mime_type")
+  sizeBytes    Int?     @map("size_bytes")
+  savedPath    String   @map("saved_path")
+  uploadField  String?  @map("upload_field")
+  timestamp    DateTime @default(now())
+
+  session Session? @relation(fields: [sessionId], references: [id])
+
+  @@map("captured_uploads")
+}
